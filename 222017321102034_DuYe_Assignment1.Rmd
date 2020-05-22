@@ -1,0 +1,351 @@
+---
+title: "STATS369_Assignment1"
+author: "222017321102034 DuYe"
+date: "4/6/2020"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(leaps)
+library(glmnet)
+```
+
+## Assignment Task
+
+Under the 'datasets' folder, you have data on the number of people counted cycling in Auckland, and the amount of rain. 
+
+1.  If you try to convert the cycle count data to tidy format (which you don't have to do for this assignment, because it's hard), what is one obstacle you will encounter?
+
+2. Compute the total number of cyclists counted for each day, and a suitable summary of the rainfall for each day, in the same data frame.
+
+3. Draw suitable graphs to display how the number of cyclists varies over time, over season, over day of the week, and with rain.
+
+4. Fit a regression model to predict the number of cyclists from year, season, day of the week, and rain. 
+
+5. Based on your graphs and model, does rain have a big impact on the number of people cycling in Auckland?
+
+## Loading Data
+
+```{r read datasets}
+daily_cycle_count_2016 = read.csv("./AS1_datasets/dailyakldcyclecountdata2016_updated.csv", header = TRUE)
+daily_cycle_count_2017 = read.csv("./AS1_datasets/dailyakldcyclecountdata2017_1.csv", header = TRUE)
+daily_cycle_count_2018 = read.csv("./AS1_datasets/dailyakldcyclecountdata2018.csv", header = TRUE)
+rain_2016 = read.csv("./AS1_datasets/rain16.csv", header = TRUE)
+rain_2017 = read.csv("./AS1_datasets/rain17.csv", header = TRUE)
+rain_2018 = read.csv("./AS1_datasets/rain18.csv", header = TRUE)
+```
+
+## 1. If you try to convert the cycle count data to tidy format (which you don't have to do for this assignment, because it's hard), what is one obstacle you will encounter?
+
+Tidy's data requires only one observation per row and column, but the data here contains cyclist data for many roads, which is difficult to handle.
+
+At the same time, if the data needs to be merged with rian data, the rainfall data and the daily cyclist data have different dimensions. The rainfall data is hourly and has two monitoring stations, and the cyclist data does not include hourly data. So it cannot be cleaned up completely.
+
+## 2.Compute the total number of cyclists counted for each day, and a suitable summary of the rainfall for each day, in the same data frame.
+
+```{r}
+# Check datasets
+str(daily_cycle_count_2016)
+# str(daily_cycle_count_2017)
+# str(daily_cycle_count_2018)
+# summary(daily_cycle_count_2016)
+# summary(daily_cycle_count_2017)
+# summary(daily_cycle_count_2018)
+```
+
+```{r}
+# Combine 3 years' data
+# Delete roads not in 16/17
+daily_cycle_count_2017 = subset(daily_cycle_count_2017, select=-c(Dominion.Road..near.View.Rd..Total.Cyclists,Matakana.Cyclists,Oceanview.Rd.Waiheke.Cyclists,Ormiston.Rd.Total.Cyclists, Pukekohe...Queen.St.Cyclists,Saint.Lukes.Rd.Total,Waterview.SP.Unitec))
+
+daily_cycle_count_2018 = subset(daily_cycle_count_2018, select=-c(Archibald.Park.Cyclists, Dominion.Road.Total.Cyclists,Matakana.Cyclists,Oceanview.Rd.Waiheke.Cyclists,Ormiston.Rd.Total.Cyclists, Pukekohe...Queen.St.Cyclists,Rankin.Ave.Cyclists,SW.Shared.Path.Cyclists,Saint.Lukes.Rd.Total,TeAtatu.Peninsula.Pathway.Cyclists,Waterview.Unitec.Counter.Cyclists))
+
+# Remove extra row in 18 data
+daily_cycle_count_2018 = daily_cycle_count_2018[-366,]
+
+# Unified row names
+names(daily_cycle_count_2016) = names(daily_cycle_count_2018)
+names(daily_cycle_count_2017) = names(daily_cycle_count_2018)
+
+daily_cycle_count_all = rbind(daily_cycle_count_2016,daily_cycle_count_2017[,],daily_cycle_count_2018[,])
+
+# Recheck data
+head(summary(daily_cycle_count_all))
+
+# Remove roads that contain lots of NA
+daily_cycle_count_all = subset(daily_cycle_count_all, select=-c(GI.TO.TAMAKI.DR.SECTION.1.Cyclists, Great.North.Rd.Total,Mangere.Safe.Routes.Cyclists,SH20A.path..sth.of.Kirkbride.Rd.,Quay.St.Spark.Arena.Total.Cyclists))
+```
+
+Cyclist data is processed first. After checking, some roads are found that not show in all 3 dataset, they need to be removed. The names of rows are different and some rows have many NA data. 
+
+
+```{r}
+# Sum of daily rainfall
+rain_test = rain_2016
+rain_test <- rain_test %>% 
+  mutate(dateno=as.factor(Date.NZST.))
+rain_count_2016 <- 
+  rain_test %>% 
+  group_by(dateno) %>% 
+  summarise( sum_amount = sum(Amount.mm.)/2 ) # Divided by 2 is the average of two sites
+
+rain_test = rain_2017
+rain_test <- rain_test %>%
+  mutate(dateno=as.factor(Date.NZST.))
+rain_count_2017 <-
+  rain_test %>%
+  group_by(dateno) %>%
+  summarise( sum_amount = sum(Amount.mm.)/2 )
+
+rain_test = rain_2018
+rain_test <- rain_test %>%
+  mutate(dateno=as.factor(Date.NZST.))
+rain_count_2018 <-
+  rain_test %>%
+  group_by(dateno) %>%
+  summarise( sum_amount = sum(Amount.mm.)/2 )
+
+rain_count_all = rbind(rain_count_2016,rain_count_2017,rain_count_2018)
+
+```
+
+Using the sum of rainfall(total mm) as a measure of rainfall, then get all data into one dataframe.
+
+```{r}
+# deal with date data by separate
+daily_cycle_count_all = 
+  daily_cycle_count_all %>% 
+  separate(col=Date, into=c("dow", "day", "month", "year"))
+
+# Combine rain data and cyclists data
+daily_cycle_count_all$dateno = unlist(rain_count_all[,1])
+daily_cycle_count_all$rain_ammount = as.numeric(unlist(rain_count_all[,2]))
+
+daily_cycle_count_all$is_rain = "True"
+daily_cycle_count_all[which(daily_cycle_count_all$rain_ammount == 0.00 ),]$is_rain = "False"
+```
+
+```{r}
+# Adding seasons
+
+daily_cycle_count_all$season = ""
+daily_cycle_count_all[which(daily_cycle_count_all$month == "Dec" | daily_cycle_count_all$month == "Jan" | daily_cycle_count_all$month == "Feb" ),]$season = "Summer"
+daily_cycle_count_all[which(daily_cycle_count_all$month == "Mar" | daily_cycle_count_all$month == "Apr" | daily_cycle_count_all$month == "May" ),]$season = "Autumn"
+daily_cycle_count_all[which(daily_cycle_count_all$month == "Jun" | daily_cycle_count_all$month == "Jul" | daily_cycle_count_all$month == "Aug" ),]$season = "Winter"
+daily_cycle_count_all[which(daily_cycle_count_all$month == "Sep" | daily_cycle_count_all$month == "Oct" | daily_cycle_count_all$month == "Nov" ),]$season = "Spring"
+```
+
+```{r}
+# Day of year
+daily_cycle_count_all$doy = c(1:366,1:365,1:365)
+```
+
+```{r}
+# Compute the total number of cyclists counted for each day
+daily_cycle_count_all$number_of_cyclists = apply(daily_cycle_count_all[,c(5:31)],1,sum,na.rm=T)
+```
+
+Do more further numerical processing of the data set.
+
+## 3.Draw suitable graphs to display how the number of cyclists varies over time, over season, over day of the week, and with rain.
+
+```{r, fig.width=6, fig.height=4}
+# Daily Raindata Figure
+rain_plot = ggplot(data = daily_cycle_count_all) + 
+  geom_point(mapping = aes(x = dateno, y = rain_ammount)) +
+  theme(axis.text.x=element_text(size=0)) + 
+  ggtitle("Daily Raindata Figure") 
+rain_plot
+
+# Daily Number of Cyclists Figure
+cyclists_plot = 
+  ggplot(data = daily_cycle_count_all) + 
+  geom_point(mapping = aes(x = dateno, y = number_of_cyclists, color=year, shape = is_rain)) + 
+  geom_hline(yintercept = summary(daily_cycle_count_all$number_of_cyclists)[2], color="red",size=1,show.legend = "ok") + 
+  theme(axis.text.x=element_text(size=0)) + 
+  ggtitle("Daily Number of Cyclists Figure") 
+cyclists_plot
+```
+
+Over the past three years, there has been no dramatic pattern change in rainfall, and the number of cyclists is basically in the same pattern.
+
+
+```{r,fig.width=6, fig.height=3}
+# Number of Cyclists (Rian or Not) Figure
+daily_cycle_count_all$is_rain = factor(daily_cycle_count_all$is_rain,levels=c('False','True'))
+
+cyclists_plot_rain3 = 
+  qplot(is_rain, number_of_cyclists, data = daily_cycle_count_all, geom= "boxplot", fill = is_rain) + ggtitle("Rain/No-Rain Cyclists Figure")
+cyclists_plot_rain3
+```
+Obviously, on rainy days, the number of riders will be much smaller, and we can explain the specific number changes in the model
+
+```{r,fig.width=6, fig.height=3}
+# Number of Cyclists (year) Figure
+daily_cycle_count_all$year = factor(daily_cycle_count_all$year,levels=c('2016','2017','2018'))
+
+cyclists_plot_year = 
+  qplot(year, number_of_cyclists, data = daily_cycle_count_all, geom= "boxplot", fill = year) + ggtitle("Years Cyclists Figure")
+cyclists_plot_year
+```
+
+It can be seen that the number of riders has maintained a slight upward trend during the past three years.
+
+
+```{r,fig.width=6, fig.height=3}
+# Count the number of cyclists by season
+daily_cycle_count_all$season = factor(daily_cycle_count_all$season,levels=c('Spring','Summer','Autumn','Winter'))
+
+# Number of Cyclists (season) Figure
+cyclists_plot_season = 
+  qplot(season, number_of_cyclists, data = daily_cycle_count_all, geom= "boxplot", fill = season) + ggtitle("Seasons Cyclists Figure")
+cyclists_plot_season
+```
+
+```{r,fig.width=6, fig.height=4}
+# Count the number of cyclists by month
+daily_cycle_count_all$month = factor(daily_cycle_count_all$month,levels=c('Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'))
+
+# Number of Cyclists (month) Figure
+cyclists_plot_month = 
+  qplot(month, number_of_cyclists, data = daily_cycle_count_all, geom= "boxplot", fill = month) + 
+  ggtitle("Months Cyclists Figure")
+cyclists_plot_month
+```
+
+In winter, the number of cyclists decreased significantly, while in other seasons there was a slight change. The figure of the month can also see the same trend (because the seasonal variable is completely generated by the month)
+
+
+```{r,fig.width=6, fig.height=4}
+# Count the number of cyclists by month
+dow_count <- 
+  daily_cycle_count_all %>% 
+  group_by(dow) %>% 
+  summarise( dow_sum = sum(number_of_cyclists))
+
+# Factor to set the order of output when drawing
+# Count the number of cyclists by month
+daily_cycle_count_all$dow = factor(daily_cycle_count_all$dow,levels=c('Mon','Tue','Wed','Thu','Fri','Sat','Sun'))
+
+# Number of Cyclists (day of week) Figure
+cyclists_plot_dow2 = 
+  qplot(dow, number_of_cyclists, data = daily_cycle_count_all, geom= "boxplot", fill = dow) + ggtitle("DOW Cyclists Figure")
+cyclists_plot_dow2
+```
+The average number of people on Tuesday is the highest, but not much compared to other working days. The number of riders on the weekend has dropped significantly.
+
+
+```{r,fig.width=6, fig.height=5}
+# Rainfall vs Number of Cyclists
+cyclists_plot_rain = 
+  ggplot(data = daily_cycle_count_all) + 
+  geom_point(mapping = aes(x = rain_ammount, y = number_of_cyclists)) + 
+  geom_smooth(mapping = aes(x = rain_ammount, y = number_of_cyclists))+ 
+  ggtitle("Rainfall vs Number of Cyclists Figure") +
+  xlab("Rain ammount (total mm)")
+cyclists_plot_rain
+
+cyclists_plot_rain2 = 
+  ggplot(data = daily_cycle_count_all) + 
+  geom_point(mapping = aes(x = rain_ammount, y = number_of_cyclists,color = year)) + 
+  geom_smooth(mapping = aes(x = rain_ammount, y = number_of_cyclists,color = year))+ 
+   facet_grid(year~.)
+  ggtitle("Rainfall vs Number of Cyclists  (different year) Figure")
+cyclists_plot_rain2
+
+```
+
+We can see that with the increase of **rain_amount**, that is, the greater the rain, the number of cyclists will be much smaller, and the data for the past three years has basically maintained the same trend.
+
+
+## 4. Fit a regression model to predict the number of cyclists from year, season, day of the week, and rain. 
+
+```{r}
+# The sorting of columns and the selection of certain columns constitute the training set
+cols <- colnames(daily_cycle_count_all)
+new_cols = c(cols[4],cols[35],cols[1],cols[33],cols[34],cols[37])
+train_data = daily_cycle_count_all[,new_cols]
+```
+
+```{r}
+# Fit model
+model1 = lm(number_of_cyclists~year+season+dow+rain_ammount+is_rain+year ,data = daily_cycle_count_all)
+summary(model1)
+```
+
+This model seems fine. All variables have small p-value, which means all of these variables have strong relationship with the **number_of_cyclist**, R-squared is about 63%, this model could explain 63% of data. 
+
+In the past three years, the  **number of cyclists ** has gradually increased, on average, there were 370/970 more people in 2017/2018 years than in 2016 years; compared to spring, summer and autumn,   **number of cyclists** is greater, and the **number of cyclists** in winter is 1281 less than spring. For day of week, Friday, Saturday and Sunday **number of riders ** has dropped significantly. For the rainfall that this assignment focuses on, the increase in   **rian amount** per unit will cause the   **number of cyclists** to decrease by 159, and the **number of cyclists** on rainy days will decrease by 1553 compared with other day.
+
+In oreder to recheck the model, I would do Lasso and Ridge regression and see the result.
+
+
+```{r,fig.width=6, fig.height=3}
+X <- model.matrix( ~ ., train_data[1:5])
+y = train_data$number_of_cyclists
+str(X)
+
+# try lasso
+set.seed(123)
+fit <-glmnet(X,y,alpha=1)   # 1 for L1
+plot(fit)
+xval <-cv.glmnet(X,y)
+plot(xval)
+coef(fit, s=xval$lambda.min)
+```
+
+```{r,fig.width=6, fig.height=3}
+# try ridge
+set.seed(123)
+fit <-glmnet(X,y,alpha=0) # 0 for L2
+plot(fit)
+xval <-cv.glmnet(X,y)  # Choosing lamda
+plot(xval)
+coef(fit, s=xval$lambda.min)
+predy<-predict(fit, X, s=xval$lambda.min)
+```
+
+
+Overall, the parameter of variables are very similar with the original model, these two regressions do not seem to help much. Therefore, I decided to use the original model. The predict value is shown below:
+
+
+```{r}
+predy<-predict(model1, train_data)
+# Plot Predict Result
+predict_plot = 
+  ggplot(data = train_data) + 
+  geom_point(mapping = aes(x = c(1:1096), y = number_of_cyclists,color = 'actual')) + 
+  geom_smooth(mapping = aes(x = c(1:1096), y = number_of_cyclists,color = 'actual_smooth')) +
+  geom_point(mapping = aes(x = c(1:1096), y = predy,color = 'pred')) +
+  geom_smooth(mapping = aes(x = c(1:1096), y = predy,color = 'pred_smooth')) +
+  xlab("Samples")
+predict_plot
+```
+
+We can find that the predicted curve almost coincides with the real curve, and the overall data fit is also good.
+
+## 5. Based on your graphs and model, does rain have a big impact on the number of people cycling in Auckland?
+
+```{r,fig.width=6, fig.height=3}
+cyclists_plot_rain3
+cyclists_plot_rain
+```
+
+I would say yes. 
+
+From the figure, there is a clear difference between the number of cyclists with and without rain. On rainy days, the number of riders is significantly lower than on days without rain. At the same time, on the correlation graph of rainfall and cyclists, with the increase of rainfall(rain amount by total mm), the number of cyclists showed a decreasing trend.
+
+```{r}
+coef(model1)[13]
+coef(model1)[14]
+```
+
+The fitted model can further support and explain this impact in detail.Each unit of rainfall increases, 160 people will give up riding to go out, and the number of riders on rainy days will be reduced by 1554 people compared with the days without rain. In general, once it rains, fewer people will choose to ride; and the greater the rain, the fewer people will choose cycling.
+
